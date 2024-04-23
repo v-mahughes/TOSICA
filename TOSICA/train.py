@@ -215,22 +215,24 @@ def evaluate(model, data_loader, device, epoch):
                                                                                accu_num.item() / sample_num)
     return accu_loss.item() / (step + 1), accu_num.item() / sample_num
 
-def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Celltype',max_g=300,max_gs=300, mask_ratio = 0.015,n_unannotated = 1,batch_size=8, embed_dim=48,depth=2,num_heads=4,lr=0.001, epochs= 10, lrf=0.01):
+def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='Celltype', max_g=300, max_gs=300, mask_ratio=0.015, n_unannotated=1, batch_size=8, embed_dim=48, depth=2, num_heads=4, lr=0.001, epochs=10, lrf=0.01):
+    # Initialize wandb
+    wandb.init(project="your_project_name", name="your_experiment_name")
+
     GLOBAL_SEED = 1
     set_seed(GLOBAL_SEED)
     device = 'cuda:0'
     device = torch.device(device if torch.cuda.is_available() else "cpu")
     print(device)
-    today = time.strftime('%Y%m%d',time.localtime(time.time()))
-    #train_weights = os.getcwd()+"/weights%s"%today
-    project = project or gmt_path.replace('.gmt','')+'_%s'%today
-    project_path = os.getcwd()+'/%s'%project
+    today = time.strftime('%Y%m%d', time.localtime(time.time()))
+    project = project or gmt_path.replace('.gmt', '') + '_%s' % today
+    project_path = os.getcwd() + '/%s' % project
     if os.path.exists(project_path) is False:
         os.makedirs(project_path)
     tb_writer = SummaryWriter()
-    exp_train, label_train, exp_valid, label_valid, inverse,genes = splitDataSet(adata,label_name)
+    exp_train, label_train, exp_valid, label_valid, inverse, genes = splitDataSet(adata, label_name)
     if gmt_path is None:
-        mask = np.random.binomial(1,mask_ratio,size=(len(genes), max_gs))
+        mask = np.random.binomial(1, mask_ratio, size=(len(genes), max_gs))
         pathway = list()
         for i in range(max_gs):
             x = 'node %d' % i
@@ -242,44 +244,42 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
         else:
             gmt_path = get_gmt(gmt_path)
         reactome_dict = read_gmt(gmt_path, min_g=0, max_g=max_g)
-        mask,pathway = create_pathway_mask(feature_list=genes,
-                                          dict_pathway=reactome_dict,
-                                          add_missing=n_unannotated,
-                                          fully_connected=True)
-        pathway = pathway[np.sum(mask,axis=0)>4]
-        mask = mask[:,np.sum(mask,axis=0)>4]
-        #print(mask.shape)
-        pathway = pathway[sorted(np.argsort(np.sum(mask,axis=0))[-min(max_gs,mask.shape[1]):])]
-        mask = mask[:,sorted(np.argsort(np.sum(mask,axis=0))[-min(max_gs,mask.shape[1]):])]
-        #print(mask.shape)
+        mask, pathway = create_pathway_mask(feature_list=genes,
+                                            dict_pathway=reactome_dict,
+                                            add_missing=n_unannotated,
+                                            fully_connected=True)
+        pathway = pathway[np.sum(mask, axis=0) > 4]
+        mask = mask[:, np.sum(mask, axis=0) > 4]
         print('Mask loaded!')
-    np.save(project_path+'/mask.npy',mask)
-    pd.DataFrame(pathway).to_csv(project_path+'/pathway.csv') 
-    pd.DataFrame(inverse,columns=[label_name]).to_csv(project_path+'/label_dictionary.csv', quoting=None)
-    num_classes = np.int64(torch.max(label_train)+1)
-    #print(num_classes)
+    np.save(project_path + '/mask.npy', mask)
+    pd.DataFrame(pathway).to_csv(project_path + '/pathway.csv')
+    pd.DataFrame(inverse, columns=[label_name]).to_csv(project_path + '/label_dictionary.csv', quoting=None)
+    num_classes = np.int64(torch.max(label_train) + 1)
     train_dataset = MyDataSet(exp_train, label_train)
     valid_dataset = MyDataSet(exp_valid, label_valid)
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                batch_size=batch_size,
                                                shuffle=True,
-                                               pin_memory=True,drop_last=True)
+                                               pin_memory=True, drop_last=True)
     valid_loader = torch.utils.data.DataLoader(valid_dataset,
-                                             batch_size=batch_size,
-                                             shuffle=False,
-                                             pin_memory=True,drop_last=True)
-    model = create_model(num_classes=num_classes, num_genes=len(exp_train[0]),  mask = mask,embed_dim=embed_dim,depth=depth,num_heads=num_heads,has_logits=False).to(device) 
+                                               batch_size=batch_size,
+                                               shuffle=False,
+                                               pin_memory=True, drop_last=True)
+    model = create_model(num_classes=num_classes,
+                         num_genes=len(exp_train[0]),
+                         mask=mask,
+                         embed_dim=embed_dim,
+                         depth=depth,
+                         num_heads=num_heads,
+                         has_logits=False).to(device)
     if pre_weights != "":
         assert os.path.exists(pre_weights), "pre_weights file: '{}' not exist.".format(pre_weights)
         preweights_dict = torch.load(pre_weights, map_location=device)
         print(model.load_state_dict(preweights_dict, strict=False))
-    #for name, param in model.named_parameters():
-    #    if param.requires_grad:
-    #        print(name) 
     print('Model builded!')
-    pg = [p for p in model.parameters() if p.requires_grad]  
-    optimizer = optim.SGD(pg, lr=lr, momentum=0.9, weight_decay=5E-5) 
-    lf = lambda x: ((1 + math.cos(x * math.pi / epochs)) / 2) * (1 - lrf) + lrf  
+    pg = [p for p in model.parameters() if p.requires_grad]
+    optimizer = optim.SGD(pg, lr=lr, momentum=0.9, weight_decay=5E-5)
+    lf = lambda x: ((1 + math.cos(x * math.pi / epochs)) / 2) * (1 - lrf) + lrf
     scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
     for epoch in range(epochs):
         train_loss, train_acc = train_one_epoch(model=model,
@@ -287,11 +287,15 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
                                                 data_loader=train_loader,
                                                 device=device,
                                                 epoch=epoch)
-        scheduler.step() 
+        scheduler.step()
         val_loss, val_acc = evaluate(model=model,
                                      data_loader=valid_loader,
                                      device=device,
                                      epoch=epoch)
+
+        # Log loss values using wandb
+        wandb.log({"train_loss": train_loss, "train_acc": train_acc, "val_loss": val_loss, "val_acc": val_acc})
+
         tags = ["train_loss", "train_acc", "val_loss", "val_acc", "learning_rate"]
         tb_writer.add_scalar(tags[0], train_loss, epoch)
         tb_writer.add_scalar(tags[1], train_acc, epoch)
@@ -299,11 +303,7 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
         tb_writer.add_scalar(tags[3], val_acc, epoch)
         tb_writer.add_scalar(tags[4], optimizer.param_groups[0]["lr"], epoch)
         if platform.system().lower() == 'windows':
-            torch.save(model.state_dict(), project_path+"/model-{}.pth".format(epoch))
+            torch.save(model.state_dict(), project_path + "/model-{}.pth".format(epoch))
         else:
-            torch.save(model.state_dict(), "/%s"%project_path+"/model-{}.pth".format(epoch))
+            torch.save(model.state_dict(), "/%s" % project_path + "/model-{}.pth".format(epoch))
     print('Training finished!')
-
-#train(adata, gmt_path, pre_weights, batch_size=8, epochs=20)
-
-
