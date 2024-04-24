@@ -215,9 +215,9 @@ def evaluate(model, data_loader, device, epoch):
                                                                                accu_num.item() / sample_num)
     return accu_loss.item() / (step + 1), accu_num.item() / sample_num
 
-def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='Celltype', max_g=300, max_gs=300, mask_ratio=0.015, n_unannotated=1, batch_size=8, embed_dim=48, depth=2, num_heads=4, lr=0.001, epochs=10, lrf=0.01):
+def fit_model(adata, gmt_path, project=None, pre_weights='', label_name='Celltype', max_g=300, max_gs=300, mask_ratio=0.015, n_unannotated=1, batch_size=8, embed_dim=48, depth=2, num_heads=4, lr=0.001, epochs=10, lrf=0.01, wandb_project=None, wandb_name=None):
     # Initialize wandb
-    wandb.init(project="your_project_name", name="your_experiment_name")
+    wandb.init(project=wandb_project, name=wandb_name)
 
     GLOBAL_SEED = 1
     set_seed(GLOBAL_SEED)
