@@ -34,21 +34,21 @@ def todense(adata):
     import scipy
     #print((type(adata.X)))
     if isinstance(adata.X, scipy.sparse.csr_matrix) or isinstance(adata.X, scipy.sparse.csc_matrix):
-    return adata.X.todense()
-    #else:
-    #    return adata.X
+        return adata.X.todense()
+    else:
+       return adata.X
 
 class MyDataSet(Dataset):
     """ 
     Preproces input matrix and labels.
 
     """
-    def __init__(self, exp, label):
-        self.exp = exp
+    def __init__(self, adata, label):
+        self.adata = adata
         self.label = label
         self.len = len(label)
     def __getitem__(self,index):
-        return self.exp[index],self.label[index]
+        return torch.tensor(self.adata[index, :].to_memory().X.toarray(), dtype=torch.float32),torch.from_numpy(np.array(self.label).astype(np.int64))
     def __len__(self):
         return self.len
 
@@ -88,6 +88,21 @@ def splitDataSet(adata,label_name='Celltype', tr_ratio= 0.7):
     exp_valid = torch.from_numpy(np.array(valid_dataset)[:,:n_genes].astype(np.float32))
     label_valid = torch.from_numpy(np.array(valid_dataset)[:,-1].astype(np.int64))
     return exp_train, label_train, exp_valid, label_valid, inverse, genes
+
+def encode_labels(train_adata, val_adata, label_name='Celltype'): 
+    """ 
+    Split data set into training set and test set.
+
+    """
+    label_encoder = LabelEncoder()
+    ct_labels = np.concatenate((train_adata.obs[label_name].astype('str').values, val_adata.obs[label_name].astype('str').values))
+    genes = train_adata.var_names.values
+    ct_labels = label_encoder.fit_transform(ct_labels)
+    inverse = label_encoder.inverse_transform(range(0,np.max(ct_labels)+1))
+    label_train = ct_labels[0:train_adata.n_obs, :]
+    label_valid = ct_labels[train_adata.n_obs:]
+
+    return label_train, label_valid, inverse, genes
 
 def get_gmt(gmt):
     import pathlib
@@ -218,7 +233,7 @@ def evaluate(model, data_loader, device, epoch):
                                                                                accu_num.item() / sample_num)
     return accu_loss.item() / (step + 1), accu_num.item() / sample_num
 
-def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Celltype',max_g=300,max_gs=300, mask_ratio = 0.015,n_unannotated = 1,batch_size=8, embed_dim=48,depth=2,num_heads=4,lr=0.001, epochs= 10, lrf=0.01):
+def fit_model(train_adata, val_adata, gmt_path, project = None, pre_weights='', label_name='Celltype',max_g=300,max_gs=300, mask_ratio = 0.015,n_unannotated = 1,batch_size=8, embed_dim=48,depth=2,num_heads=4,lr=0.001, epochs= 10, lrf=0.01):
     
     # Initialize wandb
     wandb.init(project='scSFM-TOSICA-MODEL-runs')
@@ -234,7 +249,10 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
     if os.path.exists(project_path) is False:
         os.makedirs(project_path)
     tb_writer = SummaryWriter()
-    exp_train, label_train, exp_valid, label_valid, inverse,genes = splitDataSet(adata,label_name)
+    
+    print('getting label encoder')
+    label_train, label_valid, inverse, genes = encode_labels(train_adata,val_adata, label_name)
+
     if gmt_path is None:
         mask = np.random.binomial(1,mask_ratio,size=(len(genes), max_gs))
         pathway = list()
@@ -259,16 +277,18 @@ def fit_model(adata, gmt_path, project = None, pre_weights='', label_name='Cellt
     pd.DataFrame(pathway).to_csv(project_path+'/pathway.csv') 
     pd.DataFrame(inverse,columns=[label_name]).to_csv(project_path+'/label_dictionary.csv', quoting=None)
     num_classes = np.int64(torch.max(label_train)+1)
-    train_dataset = MyDataSet(exp_train, label_train)
-    valid_dataset = MyDataSet(exp_valid, label_valid)
+    train_dataset = MyDataSet(train_adata, label_train)
+    valid_dataset = MyDataSet(val_adata, label_valid)
+    print('made dataset')
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                batch_size=batch_size,
                                                shuffle=True,
-                                               pin_memory=True,drop_last=True)
+                                               pin_memory=True)
     valid_loader = torch.utils.data.DataLoader(valid_dataset,
                                              batch_size=batch_size,
                                              shuffle=False,
-                                             pin_memory=True,drop_last=True)
+                                             pin_memory=True)
+    print('data loaded')
     model = create_model(num_classes=num_classes, num_genes=len(exp_train[0]),  mask = mask,embed_dim=embed_dim,depth=depth,num_heads=num_heads,has_logits=False).to(device) 
     if pre_weights != "":
         assert os.path.exists(pre_weights), "pre_weights file: '{}' not exist.".format(pre_weights)
