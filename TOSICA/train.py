@@ -289,7 +289,7 @@ def fit_model(train_adata, val_adata, gmt_path, project = None, pre_weights='', 
                                              shuffle=False,
                                              pin_memory=True)
     print('data loaded')
-    model = create_model(num_classes=num_classes, num_genes=len(exp_train[0]),  mask = mask,embed_dim=embed_dim,depth=depth,num_heads=num_heads,has_logits=False).to(device) 
+    model = create_model(num_classes=num_classes, num_genes=len(train_adata.n_vars),  mask = mask,embed_dim=embed_dim,depth=depth,num_heads=num_heads,has_logits=False).to(device) 
     if pre_weights != "":
         assert os.path.exists(pre_weights), "pre_weights file: '{}' not exist.".format(pre_weights)
         preweights_dict = torch.load(pre_weights, map_location=device)
